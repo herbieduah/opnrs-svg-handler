@@ -1,0 +1,617 @@
+Thanks for sharing the `Repomix Output - AI Formats.xml` file, which provides a comprehensive view of the `transform` repository's codebase. This repository is highly relevant to your goal of building a robust SVG-to-React-Native-SVG converter, as it already includes a dedicated `svg-to-react-native.tsx` page and supporting utilities for SVG processing. Since you're experiencing issues with the Prettier formatting error (`TypeError: Cannot read properties of undefined (reading 'languages')`) in your `App.jsx`, and you want to produce the `FinalVersion` component reliably, we can leverage the `transform` repo's components, utilities, and configurations to enhance your converter. Below, I’ll analyze the relevant parts of the repo, suggest improvements to your `svgToReactNative` function, and propose a robust solution that avoids the Prettier crash while ensuring the desired output.
+
+### Relevant Components and Utilities in the `transform` Repository
+The `transform` repository is designed for various code transformations, including SVG-to-React-Native conversion. Here are the key files and components that can help:
+
+1. **pages/svg-to-react-native.tsx**:
+   - This file likely contains the main logic for the SVG-to-React-Native conversion UI, similar to your `App.jsx`. It uses components like `ConversionPanel`, `EditorPanel`, and `SvgConverter` to handle input, conversion, and output.
+   - It integrates with the `svgr.worker.ts` and `svgo.worker.ts` for SVG processing, which could provide a more robust conversion pipeline than your current regex-based approach.
+
+2. **workers/svgr.worker.ts**:
+   - Uses `@svgr/core` to convert SVGs to React components, with options for React Native (`native: true`).
+   - Example usage:
+     ```javascript
+     const result = await convert(value, {
+       plugins: [require("@svgr/plugin-jsx").default],
+       svgo: false,
+       native
+     });
+     ```
+   - This is more reliable than manual regex parsing, as it leverages SVGR’s parsing and optimization capabilities. You can adapt this to produce your `FinalVersion` format.
+
+3. **workers/svgo.worker.ts**:
+   - Uses the `SVGO` library to optimize SVGs before conversion, with configurable plugins.
+   - Example:
+     ```javascript
+     const svgo = new SVGO({
+       full: true,
+       plugins
+     });
+     svgo.optimize(payload.value).then(result => {...});
+     ```
+   - Pre-optimizing the SVG can reduce the input size (e.g., your 548,380-character SVG), potentially mitigating Prettier issues.
+
+4. **utils/prettify.ts**:
+   - Contains the `prettify` function used for formatting code, which wraps Prettier:
+     ```javascript
+     export async function prettify(language: BuiltInParserName, value: string) {
+       return prettier.format(value, {
+         parser: language,
+         plugins: [
+           require("prettier/parser-babel"),
+           require("prettier/parser-html"),
+           require("prettier/parser-typescript")
+         ]
+       });
+     }
+     ```
+   - This is where your Prettier error originates. The repo’s version doesn’t include explicit error handling, which we’ll need to add.
+
+5. **components/SvgConverter.tsx**:
+   - Likely handles the SVG conversion UI, integrating SVGR and SVGO workers. It could provide a reference for structuring your converter UI and handling large inputs.
+
+6. **package.json**:
+   - Lists dependencies like:
+     - `"@svgr/core": "^5.5.0"` and `"@svgr/plugin-jsx": "^5.5.0"` for SVG-to-React conversion.
+     - `"svgo": "^1.3.2"` for SVG optimization.
+     - `"prettier": "^1.18.2"` for formatting, which is outdated and may contribute to the error.
+   - The repo uses an older Prettier version, which could be causing the `languages` error. Upgrading to a newer version (e.g., `^2.8.8`) might help.
+
+7. **utils/workerWrapper.ts**:
+   - Provides a `Wrapper` class to manage Web Workers, ensuring asynchronous SVG processing:
+     ```javascript
+     export class Wrapper {
+       worker: Worker;
+       constructor(worker: Worker) {
+         this.worker = worker;
+         this.worker.onmessage = handleMsg;
+       }
+       send(str): Promise<any> {
+         return sendMsg(str, this.worker);
+       }
+     }
+     ```
+   - This could be used to offload SVG conversion to a worker, improving performance for large SVGs.
+
+### Issues with Your Current Converter
+Your `App.jsx` has a solid foundation but faces these challenges:
+- **Prettier Crash**: The `prettier.format` call for JSX (`parser: "babel"`) fails with `Cannot read properties of undefined (reading 'languages')`, likely due to:
+  - The large JSX output overwhelming Prettier.
+  - A bug in `prettier/parser-babel` or version incompatibility.
+- **Regex-Based Parsing**: The `svgToReactNative` function uses regex to parse SVG content, which is fragile for complex SVGs (e.g., nested elements, malformed attributes).
+- **Performance**: The 548,380-character SVG generates massive JSX, slowing down the editor and formatting.
+- **Error Handling**: While you’ve added a size-based skip (`jsx.length < 100000`), the error persists, possibly for outputs near the threshold or due to Prettier’s internal state.
+
+### Proposed Solution
+To build a robust SVG-to-React-Native converter that produces your `FinalVersion` component, we’ll:
+1. **Use SVGR for Conversion**: Replace regex-based parsing with `@svgr/core` to reliably convert SVGs to React Native components.
+2. **Optimize SVGs with SVGO**: Pre-optimize the SVG to reduce its size before conversion.
+3. **Bypass Prettier for Large Outputs**: Enhance error handling to catch Prettier errors and fall back to raw JSX.
+4. **Use Web Workers**: Offload conversion to a worker to improve performance.
+5. **Update Dependencies**: Ensure Prettier and its plugins are up-to-date.
+6. **Customize Output**: Post-process SVGR’s output to match your `FinalVersion` format (with `ThemeSVGProps`, `fillColor`, etc.).
+
+### Updated `App.jsx`
+Here’s a revised `App.jsx` that integrates SVGR and SVGO, adds robust error handling, and ensures the `FinalVersion` output. I’ve also addressed the Prettier error by catching it explicitly and lowering the formatting threshold.
+
+```jsx
+import { useState, useEffect } from "react";
+import Editor from "react-simple-code-editor";
+import prettier from "prettier/standalone";
+import parserBabel from "prettier/parser-babel";
+import parserHtml from "prettier/parser-html";
+import { convert } from "@svgr/core";
+import SVGO from "svgo";
+import "./App.css";
+
+async function svgToReactNative(svg) {
+  if (!svg || typeof svg !== "string") return "// Invalid SVG input";
+
+  try {
+    // Optimize SVG with SVGO
+    const svgo = new SVGO({
+      full: true,
+      plugins: [
+        "removeDoctype",
+        "removeXMLProcInst",
+        "removeComments",
+        "removeMetadata",
+        "removeEditorsNSData",
+        "cleanupAttrs",
+        "mergeStyles",
+        "inlineStyles",
+        "minifyStyles",
+        "removeUselessDefs",
+        "cleanupNumericValues",
+        "convertColors",
+        "removeUnknownsAndDefaults",
+        "removeNonInheritableGroupAttrs",
+        "removeUselessStrokeAndFill",
+        "cleanupEnableBackground",
+        "removeHiddenElems",
+        "removeEmptyText",
+        "convertShapeToPath",
+        "mergePaths",
+        "removeEmptyAttrs",
+        "removeEmptyContainers",
+        "removeUnusedNS"
+      ]
+    });
+    const optimized = await svgo.optimize(svg);
+    const optimizedSvg = optimized.data;
+
+    // Convert SVG to React Native component using SVGR
+    const jsx = await convert(optimizedSvg, {
+      plugins: [require("@svgr/plugin-jsx").default],
+      svgo: false,
+      native: true,
+      template: ({ template }, opts, { imports, componentName, props, jsx }) => {
+        const reactNativeTemplate = template.smart({
+          plugins: ["typescript"]
+        });
+        return reactNativeTemplate.ast`
+          ${imports}
+          import Svg, { Path } from "react-native-svg";
+
+          interface ThemeSVGProps {
+            width: number // Accepts width as a prop
+            fillColor: string
+          }
+
+          const ${componentName}: React.FC<ThemeSVGProps> = ({ width, fillColor }) => {
+            const height = (width * 1024) / 1024;
+            return (
+              ${jsx}
+            );
+          };
+
+          export default ${componentName};
+        `;
+      }
+    });
+
+    // Post-process to apply fillColor to Path elements
+    const finalJsx = jsx.replace(
+      /<Path([^>]*?)fill="[^"]*"([^>]*?)\/>/g,
+      "<Path$1fill={fillColor}$2 />"
+    );
+
+    return finalJsx;
+  } catch (error) {
+    console.error("SVG conversion error:", error);
+    return "// Error converting SVG: " + error.message;
+  }
+}
+
+function App() {
+  const [svgInput, setSvgInput] = useState("");
+  const [debouncedInput, setDebouncedInput] = useState(svgInput);
+  const [converted, setConverted] = useState("");
+  const [error, setError] = useState(null);
+  const [formattingError, setFormattingError] = useState(null);
+
+  // Debounce svgInput for performance
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedInput(svgInput), 1000);
+    return () => clearTimeout(handler);
+  }, [svgInput]);
+
+  // Prettify SVG input for display
+  let prettySvgInput = svgInput;
+  try {
+    if (typeof svgInput === "string" && svgInput.trim()) {
+      if (svgInput.length < 10000) {
+        prettySvgInput = prettier.format(svgInput, {
+          parser: "html",
+          plugins: [parserHtml]
+        });
+      } else {
+        setFormattingError("SVG too large to format, displaying raw input");
+      }
+    }
+  } catch (err) {
+    console.warn("SVG formatting error:", err);
+    prettySvgInput = svgInput;
+    setFormattingError(err.message);
+  }
+
+  // Convert SVG to React Native component
+  useEffect(() => {
+    if (debouncedInput) {
+      (async () => {
+        try {
+          const jsx = await svgToReactNative(debouncedInput);
+          console.log("Raw JSX length:", jsx.length);
+          console.log("Raw JSX preview:", jsx.slice(0, 500));
+          let formattedJsx = jsx;
+          try {
+            if (jsx.length < 10000) {
+              formattedJsx = prettier.format(jsx, {
+                parser: "babel",
+                plugins: [parserBabel]
+              });
+            } else {
+              console.warn("Skipping Prettier formatting due to large JSX size");
+              setFormattingError("Output too large to format, displaying raw JSX");
+            }
+          } catch (err) {
+            console.warn("JSX formatting error:", err);
+            setFormattingError("Failed to format JSX: " + err.message);
+          }
+          setConverted(formattedJsx);
+          setError(null);
+        } catch (error) {
+          console.error("Conversion error:", error);
+          setConverted("// Conversion failed: " + error.message);
+          setError(error.message);
+        }
+      })();
+    } else {
+      setConverted("");
+      setError(null);
+      setFormattingError(null);
+    }
+  }, [debouncedInput]);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(converted);
+  };
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        width: "100vw",
+        minHeight: "100vh",
+        background: "linear-gradient(120deg, #f6f8fc 0%, #e6e9f0 100%)",
+        alignItems: "center",
+        justifyContent: "center",
+        margin: 0,
+        padding: 0
+      }}
+    >
+      <div
+        style={{
+          width: "50%",
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "column",
+          height: "90vh",
+          padding: "2rem",
+          boxSizing: "border-box",
+          borderRight: "1px solid #e0e0e0",
+          background: "#fff",
+          borderTopLeftRadius: 18,
+          borderBottomLeftRadius: 18,
+          boxShadow: "0 4px 24px 0 rgba(60,60,120,0.07)"
+        }}
+      >
+        <div style={{ marginBottom: 12 }}>
+          <h2
+            style={{
+              margin: 0,
+              fontWeight: 700,
+              fontSize: 20,
+              color: "#2d3559"
+            }}
+          >
+            SVG Input
+          </h2>
+          {error && (
+            <p style={{ color: "red", margin: "8px 0 0", fontSize: 14 }}>
+              Error: {error}
+            </p>
+          )}
+          {formattingError && (
+            <p style={{ color: "#ff9800", margin: "4px 0 0", fontSize: 13 }}>
+              Formatting warning: {formattingError}
+            </p>
+          )}
+        </div>
+        <div
+          style={{
+            flex: 1,
+            overflow: "auto",
+            borderRadius: 10,
+            boxShadow: "0 1px 4px #0001",
+            background: "#f9fafd"
+          }}
+        >
+          <Editor
+            value={prettySvgInput}
+            onValueChange={(value) => {
+              const match = value.match(/<svg[\s\S]*?</svg>/i);
+              console.log("Captured SVG length:", match ? match[0].length : 0);
+              setSvgInput(match ? match[0] : "");
+            }}
+            highlight={(code) => code}
+            padding={16}
+            style={{
+              fontFamily: "Fira Mono, monospace",
+              fontSize: 15,
+              minHeight: "100%",
+              outline: "none",
+              border: "none",
+              background: "transparent",
+              color: "#2d3559",
+              overflow: "auto",
+              height: "100%",
+              resize: "none"
+            }}
+            textareaId="svg-input"
+            placeholder="Paste SVG XML here..."
+          />
+        </div>
+      </div>
+      <div
+        style={{
+          width: "50%",
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "column",
+          height: "90vh",
+          padding: "2rem",
+          boxSizing: "border-box",
+          position: "relative",
+          background: "#fff",
+          borderTopRightRadius: 18,
+          borderBottomRightRadius: 18,
+          boxShadow: "0 4px 24px 0 rgba(60,60,120,0.07)"
+        }}
+      >
+        <div
+          style={{
+            marginBottom: 12,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center"
+          }}
+        >
+          <h2
+            style={{
+              margin: 0,
+              fontWeight: 700,
+              fontSize: 20,
+              color: "#2d3559"
+            }}
+          >
+            React Native SVG Component
+          </h2>
+          <button
+            onClick={handleCopy}
+            style={{
+              marginLeft: 16,
+              padding: "6px 16px",
+              borderRadius: 6,
+              border: "none",
+              background: "#646cff",
+              color: "white",
+              cursor: "pointer",
+              fontWeight: 500,
+              fontSize: 14,
+              boxShadow: "0 1px 4px #0001"
+            }}
+            disabled={!converted}
+          >
+            Copy
+          </button>
+        </div>
+        <div
+          style={{
+            flex: 1,
+            overflow: "auto",
+            borderRadius: 10,
+            boxShadow: "0 1px 4px #0001",
+            background: "#f9fafd"
+          }}
+        >
+          <Editor
+            value={converted}
+            onValueChange={() => {}}
+            highlight={(code) => code}
+            padding={16}
+            style={{
+              fontFamily: "Fira Mono, monospace",
+              fontSize: 15,
+              minHeight: "100%",
+              outline: "none",
+              border: "none",
+              background: "transparent",
+              color: "#2d3559",
+              overflow: "auto",
+              height: "100%",
+              resize: "none"
+            }}
+            textareaId="jsx-output"
+            readOnly
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;
+```
+
+### Key Changes and Improvements
+1. **SVGR Integration**:
+   - Replaced regex-based parsing with `@svgr/core`’s `convert` function, configured for React Native (`native: true`).
+   - Used a custom SVGR template to generate the `FinalVersion` component with `ThemeSVGProps`, `width`, `height`, and `fillColor`.
+   - Post-processed the output to apply `fill={fillColor}` to `<Path>` elements, matching your desired format.
+
+2. **SVGO Optimization**:
+   - Added SVGO to optimize the SVG before conversion, using a comprehensive set of plugins to reduce size and complexity.
+   - This should shrink the 548,380-character SVG, reducing the JSX output size and mitigating Prettier issues.
+
+3. **Robust JSX Formatting**:
+   - Added a try-catch around `prettier.format` for JSX to catch the `languages` error.
+   - Lowered the formatting threshold to 10,000 characters to avoid Prettier crashes even for moderate outputs.
+   - Falls back to raw JSX with a user-friendly warning if formatting fails.
+
+4. **Enhanced Debugging**:
+   - Logs the SVG input length and a preview of the raw JSX (first 500 characters) to verify conversion.
+   - Example console output:
+     ```
+     Captured SVG length: 548380
+     Raw JSX length: 550000
+     Raw JSX preview: import React from "react"...
+     ```
+
+5. **Performance**:
+   - Kept the 1000ms debounce delay to handle large inputs smoothly.
+   - SVGR and SVGO run asynchronously, improving responsiveness.
+
+6. **Error Feedback**:
+   - Displays formatting errors in both input and output panes, ensuring users see why the output might be unformatted.
+
+### Additional Recommendations
+1. **Add Web Worker Support**:
+   - To further improve performance, adapt the `workerWrapper.ts` from the `transform` repo to offload SVGR and SVGO processing to a Web Worker. Here’s a basic example:
+     ```jsx
+     import { Wrapper, getWorker } from "./utils/workerWrapper";
+     import SvgrWorker from "@workers/svgr.worker";
+
+     const svgrWorker = getWorker(SvgrWorker);
+
+     async function svgToReactNative(svg) {
+       try {
+         const optimized = await svgo.optimize(svg); // Run SVGO in main thread or another worker
+         const jsx = await svgrWorker.send({ value: optimized.data, native: true });
+         // Post-process jsx to match FinalVersion
+         return jsx;
+       } catch (error) {
+         return "// Error converting SVG: " + error.message;
+       }
+     }
+     ```
+   - Create a `workers/svgr.worker.ts` based on the repo’s version, customized for your template.
+
+2. **Update Dependencies**:
+   - Your `package.json` should include:
+     ```json
+     "dependencies": {
+       "@svgr/core": "^5.5.0",
+       "@svgr/plugin-jsx": "^5.5.0",
+       "svgo": "^1.3.2",
+       "prettier": "^2.8.8",
+       "prettier-plugin-babel": "^0.2.8",
+       "prettier-plugin-html": "^0.2.8",
+       "react": "^17.0.2",
+       "react-dom": "^17.0.2",
+       "react-simple-code-editor": "^0.13.1"
+     }
+     ```
+   - Run `npm install` to update. The `transform` repo uses an older Prettier (`^1.18.2`), which might cause the `languages` error. Upgrading to `^2.8.8` aligns with modern standards.
+
+3. **Validate SVG Input**:
+   - Add input validation using `is-svg` from the `transform` repo’s dependencies:
+     ```jsx
+     import isSvg from "is-svg";
+
+     if (!svg || typeof svg !== "string" || !isSvg(svg)) {
+       return "// Invalid SVG input";
+     }
+     ```
+   - This ensures only valid SVGs are processed, reducing errors.
+
+4. **Error Boundary**:
+   - Your existing `ErrorBoundary.jsx` and `main.jsx` are correct. They catch the Prettier error, but the updated `App.jsx` should prevent it from reaching the boundary.
+
+### Testing the Solution
+1. **Setup**:
+   - Replace `src/App.jsx` with the updated code.
+   - Ensure `main.jsx` and `ErrorBoundary.jsx` are unchanged.
+   - Install dependencies:
+     ```bash
+     npm install @svgr/core@5.5.0 @svgr/plugin-jsx@5.5.0 svgo@1.3.2 prettier@2.8.8 prettier-plugin-babel@0.2.8 prettier-plugin-html@0.2.8
+     ```
+
+2. **Test with Small SVG**:
+   - Paste:
+     ```xml
+     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+       <path fill="white" d="M0 0h1024v1024H0z" />
+       <path fill="blue" d="M512 512m-256 0a256 256 0 1 0 512 0a256 256 0 1 0-512 0z" />
+     </svg>
+     ```
+   - Expected output:
+     ```jsx
+     import React from "react"
+     import Svg, { Path } from "react-native-svg"
+
+     interface ThemeSVGProps {
+       width: number // Accepts width as a prop
+       fillColor: string
+     }
+
+     const FinalVersion: React.FC<ThemeSVGProps> = ({ width, fillColor }) => {
+       const height = (width * 1024) / 1024
+       return (
+         <Svg width={width} height={height} viewBox="0 0 1024 1024" fill={fillColor}>
+           <Path fill={fillColor} d="M0 0h1024v1024H0z" />
+           <Path fill={fillColor} d="M512 512m-256 0a256 256 0 1 0 512 0a256 256 0 1 0-512 0z" />
+         </Svg>
+       )
+     }
+
+     export default FinalVersion
+     ```
+
+3. **Test with Large SVG**:
+   - Paste your 548,380-character SVG.
+   - Check the console for:
+     - `Captured SVG length: ~548380`
+     - `Raw JSX length:` (should be slightly larger)
+     - `Raw JSX preview:` (first 500 characters)
+     - Any warnings (e.g., “Output too large to format”)
+   - Verify:
+     - The output appears without crashing.
+     - All `<Path>` elements have `fill={fillColor}`.
+     - The `viewBox="0 0 1024 1024"` is preserved.
+     - The structure matches `FinalVersion`.
+
+4. **Copy and Validate**:
+   - Copy the output and test it in your React Native project with `react-native-svg`.
+   - Ensure it renders correctly with dynamic `fillColor` and `width`.
+
+### Debugging If Issues Persist
+- **Console Logs**: Check for `Raw JSX preview` and errors. If the JSX is incomplete, the SVG might be malformed. Share the first 200 characters of the SVG for analysis.
+- **Prettier Error**: If the `languages` error persists:
+  - Temporarily bypass Prettier entirely:
+    ```jsx
+    setConverted(jsx);
+    ```
+  - Upgrade Prettier and plugins:
+    ```bash
+    npm install prettier@2.8.8 prettier-plugin-babel@0.2.8 prettier-plugin-html@0.2.8
+    ```
+- **SVG Validation**: Use `is-svg` or an online validator (e.g., https://validator.w3.org/) to ensure the SVG is valid.
+- **Performance**: If the app lags, increase the debounce delay to 1500ms or implement Web Worker support.
+
+### Leveraging `transform` Repo Further
+- **Study `SvgConverter.tsx`**: If available, this component likely integrates SVGR and SVGO seamlessly. Adapt its logic for your UI.
+- **Reuse `prettify.ts`**: The repo’s `prettify` function can be wrapped with better error handling:
+  ```javascript
+  export async function prettify(language, value) {
+    try {
+      return await prettier.format(value, {
+        parser: language,
+        plugins: [parserBabel, parserHtml]
+      });
+    } catch (err) {
+      console.warn(`Prettier error for ${language}:`, err);
+      return value;
+    }
+  }
+  ```
+- **Adopt Worker Architecture**: The `workerWrapper.ts` and worker files provide a scalable way to handle large SVGs. Implement a similar setup for production.
+
+### Memory Context
+Your project (`opnrs-svg-handler`) focuses on converting complex SVGs for a React Native app (`opnrs`), likely for dynamic theming (e.g., OPNRS branding). Previous issues (e.g., `highlight is not a function`, Prettier errors) were addressed by disabling highlighting and adding size-based formatting skips. The `transform` repo’s SVGR-based approach aligns with your goal of producing a robust `FinalVersion` component with `ThemeSVGProps`.
+
+### Security Note
+The `Repomix` file notes that security checks are disabled, and the SVG may contain sensitive data. Ensure the SVG is sanitized before processing (e.g., using `is-svg` or a library like `sanitize-svg`).
+
+### Final Answer
+Replace `src/App.jsx` with the updated code, which uses SVGR and SVGO for robust SVG-to-React-Native conversion, catches Prettier errors, and produces the `FinalVersion` component. Install required dependencies (`@svgr/core`, `svgo`, `prettier@2.8.8`). Test with a small SVG, then your large SVG. Check console logs for SVG/JSX lengths and verify the output matches the desired format. Consider adding Web Worker support for better performance. If the error persists, share console logs, the SVG’s first 200 characters, and the raw JSX for further analysis.
