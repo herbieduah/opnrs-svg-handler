@@ -5,6 +5,13 @@ import parserBabel from "prettier/parser-babel";
 import parserHtml from "prettier/parser-html";
 import "./App.css";
 
+// Simple syntax highlighting function
+function highlight(code, language) {
+  // For now, just return the code without highlighting to avoid errors
+  // You can add proper syntax highlighting later if needed
+  return code;
+}
+
 function svgToReactNative(svg) {
   if (!svg || typeof svg !== "string") return "// Invalid SVG input";
 
@@ -21,11 +28,33 @@ function svgToReactNative(svg) {
 
     const [, svgAttrs, svgContent] = svgMatch;
 
+    // Extract width and height from original SVG before removing them
+    const widthMatch = svgAttrs.match(/width\s*=\s*["']?([^"'\s>]+)/i);
+    const heightMatch = svgAttrs.match(/height\s*=\s*["']?([^"'\s>]+)/i);
+    const widthValue = widthMatch ? widthMatch[1] : "100";
+    const heightValue = heightMatch ? heightMatch[1] : "100";
+
+    console.log("Width/Height extraction:", {
+      widthMatch,
+      heightMatch,
+      widthValue,
+      heightValue,
+    });
+
     // Remove xmlns attributes and width/height (we'll set dynamically)
     let attributes = svgAttrs
       .replace(/xmlns(:xlink)?="[^"]*"/g, "")
       .replace(/(width|height)="[^"]*"/g, "")
       .trim();
+
+    // Ensure viewBox is preserved if it exists
+    if (!attributes.includes("viewBox")) {
+      // Try to extract viewBox from original SVG
+      const viewBoxMatch = svgAttrs.match(/viewBox="([^"]*)"/i);
+      if (viewBoxMatch) {
+        attributes += ` viewBox="${viewBoxMatch[1]}"`;
+      }
+    }
 
     // Convert hyphenated attributes to camelCase
     attributes = attributes.replace(
@@ -64,14 +93,16 @@ function svgToReactNative(svg) {
           return m;
         }
       )
-      // Apply fillColor to Path elements
+      // Handle Path elements - only replace fill attributes if they exist
       .replace(
-        /<Path([^>]*?)fill="[^"]*"([^>]*?)\/>/g,
-        "<Path$1fill={fillColor}$2 />"
-      )
-      .replace(
-        /<Path([^>]*?)fill="[^"]*"([^>]*?)>([\s\S]*?)<\/Path>/g,
-        "<Path$1fill={fillColor}$2>$3</Path>"
+        /<Path([^>]*)\s+fill\s*=\s*"[^"]*"([^>]*>)/g,
+        (match, before, after) => {
+          // This path had a fill attribute, replace it with fill={fillColor}
+          console.log("Replacing fill in path:", {
+            match: match.substring(0, 100) + "...",
+          });
+          return `<Path${before} fill={fillColor} ${after}`;
+        }
       );
 
     // Remove empty lines and normalize whitespace
@@ -80,30 +111,27 @@ function svgToReactNative(svg) {
       .replace(/\n\s*\n/g, "\n")
       .trim();
 
-    // Indent content
+    // Indent content properly for JSX
     content = content
       .split("\n")
-      .map((line) => `      ${line}`)
+      .map((line) => `        ${line}`)
       .join("\n");
 
-    // Generate the final component
-    return (
-      `import React from "react"\n` +
-      `import Svg, { Path } from "react-native-svg"\n\n` +
-      `interface ThemeSVGProps {\n` +
-      `  width: number // Accepts width as a prop\n` +
-      `  fillColor: string\n` +
-      `}\n\n` +
-      `const FinalVersion: React.FC<ThemeSVGProps> = ({ width, fillColor }) => {\n` +
-      `  const height = (width * 1024) / 1024 // Maintain the aspect ratio based on the original SVG size\n\n` +
-      `  return (\n` +
-      `    <Svg width={width} height={height} ${attributes} fill={fillColor}>\n` +
-      `${content}\n` +
-      `    </Svg>\n` +
-      `  )\n` +
-      `}\n\n` +
-      `export default FinalVersion`
-    );
+    // Extract viewBox from original SVG if it exists, or create one from width/height
+    const viewBoxMatch = svgAttrs.match(/viewBox\s*=\s*["']([^"']+)["']/i);
+    let viewBox = viewBoxMatch
+      ? viewBoxMatch[1]
+      : `0 0 ${widthValue} ${heightValue}`;
+
+    console.log("Final SVG generation:", {
+      widthValue,
+      heightValue,
+      viewBox,
+      contentLength: content.length,
+    });
+
+    // Generate just the SVG JSX code (like in exampleOutput.txt)
+    return `<Svg width={width} height={height} viewBox="${viewBox}" fill={fillColor}>\n${content}\n</Svg>`;
   } catch (error) {
     console.error("SVG parsing error:", error);
     return "// Error parsing SVG: " + error.message;
@@ -116,7 +144,9 @@ function App() {
   const [converted, setConverted] = useState("// JSX output will appear here");
   const [error, setError] = useState(null); // For general conversion errors
   const [formattingError, setFormattingError] = useState(null); // For Prettier errors
-  const [copySuccess, setCopySuccess] = useState(''); // State for copy feedback
+  const [copySuccess, setCopySuccess] = useState(""); // State for copy feedback
+  const [isDragOver, setIsDragOver] = useState(false); // State for drag over feedback
+  const [fileError, setFileError] = useState(null); // State for file-related errors
 
   // Debounce svgInput for performance, especially with large inputs
   useEffect(() => {
@@ -124,44 +154,135 @@ function App() {
     return () => clearTimeout(handler);
   }, [svgInput]);
 
+  // Prevent default drag and drop behavior on the entire document
+  useEffect(() => {
+    const preventDefaults = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    const handleDocumentDrop = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Only prevent if not dropping on our target area
+      if (!e.target.closest('[data-drop-zone="true"]')) {
+        console.log("Prevented file drop outside target area");
+      }
+    };
+
+    // Add event listeners to prevent default drag/drop behavior
+    document.addEventListener("dragenter", preventDefaults, false);
+    document.addEventListener("dragover", preventDefaults, false);
+    document.addEventListener("drop", handleDocumentDrop, false);
+
+    return () => {
+      document.removeEventListener("dragenter", preventDefaults, false);
+      document.removeEventListener("dragover", preventDefaults, false);
+      document.removeEventListener("drop", handleDocumentDrop, false);
+    };
+  }, []);
+
   // --- Highlight Syntax (Simplified) ---
   const highlight = (code, language) => {
     // Only apply highlighting logic for HTML/SVG input
-    if (language === 'html') {
+    if (language === "html") {
       const syntaxHighlight = (text) =>
-       text
-         .replace(/</g, "&lt;")
-         .replace(/>/g, "&gt;")
-         // Very basic JSX/HTML tag highlighting
-         .replace(/(&lt;)(\/)?([a-zA-Z0-9]+)/g, '$1$2<span class="token tag">$3</span>')
-         // Highlight attributes (simple version)
-         .replace(/([a-zA-Z-]+)=(".*?"|'.*?'|\{.*?\})/g, '<span class="token attr-name">$1</span>=<span class="token attr-value">$2</span>')
-         // Highlight comments
-         .replace(/(\/\/.*|\/\*[\s\S]*?\*\/)/g, '<span class="token comment">$1</span>');
+        text
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          // Very basic JSX/HTML tag highlighting
+          .replace(
+            /(&lt;)(\/)?([a-zA-Z0-9]+)/g,
+            '$1$2<span class="token tag">$3</span>'
+          )
+          // Highlight attributes (simple version)
+          .replace(
+            /([a-zA-Z-]+)=(".*?"|'.*?'|\{.*?\})/g,
+            '<span class="token attr-name">$1</span>=<span class="token attr-value">$2</span>'
+          )
+          // Highlight comments
+          .replace(
+            /(\/\/.*|\/\*[\s\S]*?\*\/)/g,
+            '<span class="token comment">$1</span>'
+          );
       return syntaxHighlight(code);
     }
     // Return raw code for JSX output (no highlighting)
-    return code
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
+    return code.replace(/</g, "&lt;").replace(/>/g, "&gt;");
   };
 
-  // --- Copy to Clipboard --- 
+  // --- Copy to Clipboard ---
   const handleCopy = useCallback(() => {
     if (converted && !converted.startsWith("// Error")) {
-      navigator.clipboard.writeText(converted).then(() => {
-        setCopySuccess('Copied!');
-        setTimeout(() => setCopySuccess(''), 1500); // Clear message after 1.5s
-      }, (err) => {
-        setCopySuccess('Failed to copy!');
-        console.error('Could not copy text: ', err);
-        setTimeout(() => setCopySuccess(''), 1500);
-      });
+      navigator.clipboard.writeText(converted).then(
+        () => {
+          setCopySuccess("Copied!");
+          setTimeout(() => setCopySuccess(""), 1500); // Clear message after 1.5s
+        },
+        (err) => {
+          setCopySuccess("Failed to copy!");
+          console.error("Could not copy text: ", err);
+          setTimeout(() => setCopySuccess(""), 1500);
+        }
+      );
     } else {
-      setCopySuccess('Nothing to copy');
-      setTimeout(() => setCopySuccess(''), 1500);
+      setCopySuccess("Nothing to copy");
+      setTimeout(() => setCopySuccess(""), 1500);
     }
   }, [converted]);
+
+  // --- Drag and Drop Handlers ---
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    setFileError(null);
+
+    const files = e.dataTransfer.files;
+    if (files.length === 0) {
+      setFileError("No files dropped");
+      return;
+    }
+
+    const file = files[0];
+
+    // Check if it's an SVG file
+    if (
+      !file.type.includes("svg") &&
+      !file.name.toLowerCase().endsWith(".svg")
+    ) {
+      setFileError("Please drop an SVG file (.svg)");
+      return;
+    }
+
+    // Read the file content
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const content = event.target.result;
+        setSvgInput(content);
+        setFileError(null);
+      } catch (err) {
+        setFileError("Error reading file: " + err.message);
+      }
+    };
+    reader.onerror = () => {
+      setFileError("Failed to read the file");
+    };
+    reader.readAsText(file);
+  }, []);
 
   // Prettify SVG input for display (but not for conversion)
   // Use a separate useEffect for SVG input formatting logic
@@ -177,9 +298,13 @@ function App() {
               plugins: [parserHtml],
             });
           } else {
-            console.warn("Skipping Prettier formatting for SVG input due to large size");
+            console.warn(
+              "Skipping Prettier formatting for SVG input due to large size"
+            );
             if (isMounted) {
-              setFormattingError("SVG input too large to format, displaying raw SVG");
+              setFormattingError(
+                "SVG input too large to format, displaying raw SVG"
+              );
             }
           }
         } catch (err) {
@@ -191,91 +316,83 @@ function App() {
       } else {
         // Clear formatting error if input is empty
         if (isMounted) {
-           setFormattingError(null);
+          setFormattingError(null);
         }
       }
     }
     formatSvgInput();
-    return () => { isMounted = false; }; // Cleanup function
+    return () => {
+      isMounted = false;
+    }; // Cleanup function
   }, [svgInput]);
 
   // Convert SVG to React Native component
   useEffect(() => {
-      let isMounted = true; // Flag to prevent state update on unmounted component
-      async function convertAndFormat() {
-          if (debouncedInput) {
-              setError(null); // Clear previous conversion errors
-              setFormattingError(null); // Clear previous formatting errors
+    let isMounted = true; // Flag to prevent state update on unmounted component
+    async function convertAndFormat() {
+      if (debouncedInput) {
+        setError(null); // Clear previous conversion errors
+        setFormattingError(null); // Clear previous formatting errors
 
-              try {
-                  const jsx = svgToReactNative(debouncedInput);
-                  console.log("Raw JSX length:", jsx.length); // Log raw JSX size
+        try {
+          const jsx = svgToReactNative(debouncedInput);
+          console.log("Raw JSX length:", jsx.length); // Log raw JSX size
 
-                  if (jsx.startsWith("// Error") || jsx.startsWith("// No valid") || jsx.startsWith("// Invalid")) {
-                      // If svgToReactNative returned an error comment
-                      if (isMounted) {
-                          setConverted(jsx);
-                          setError(jsx.substring(3).trim()); // Show the error message
-                      }
-                  } else {
-                      // Conversion seemed successful, now attempt formatting
-                      let formattedJsx = jsx;
-                      if (jsx.length < 100000) {
-                          try {
-                              formattedJsx = await prettier.format(jsx, {
-                                  parser: "babel",
-                                  plugins: [parserBabel],
-                              });
-                              if (isMounted) {
-                                  setConverted(formattedJsx);
-                              }
-                          } catch (formatErr) {
-                              console.error("JSX Formatting Error:", formatErr);
-                              if (isMounted) {
-                                  setConverted(jsx); // Fallback to unformatted JSX
-                                  setFormattingError(
-                                      formatErr.message.includes("languages") ? 
-                                      "JSX formatting failed (plugin issue). Displaying raw output." : 
-                                      "JSX formatting failed: " + formatErr.message
-                                  );
-                              }
-                          }
-                      } else {
-                          console.warn("Skipping Prettier formatting due to large JSX size");
-                          if (isMounted) {
-                              setConverted(jsx); // Display raw JSX
-                              setFormattingError("Output too large to format, displaying raw JSX");
-                          }
-                      }
-                  }
-              } catch (conversionError) {
-                  // Catch errors from svgToReactNative itself (rare due to internal try-catch)
-                  console.error("Conversion Error:", conversionError);
-                  const errorMsg = "Conversion failed: " + conversionError.message;
-                  if (isMounted) {
-                      setConverted(`// ${errorMsg}`);
-                      setError(errorMsg);
-                      setFormattingError(null); // Clear any previous formatting error
-                  }
-              }
+          if (
+            jsx.startsWith("// Error") ||
+            jsx.startsWith("// No valid") ||
+            jsx.startsWith("// Invalid")
+          ) {
+            // If svgToReactNative returned an error comment
+            if (isMounted) {
+              setConverted(jsx);
+              setError(jsx.substring(3).trim()); // Show the error message
+            }
           } else {
-              // Clear output and errors if input is empty
-              if (isMounted) {
-                  setConverted("");
-                  setError(null);
-                  setFormattingError(null);
-              }
+            // For SVG JSX output, we don't need Prettier formatting
+            // Just display the raw JSX output
+            if (isMounted) {
+              setConverted(jsx);
+              setFormattingError(null); // Clear any previous formatting error
+            }
           }
+        } catch (conversionError) {
+          // Catch errors from svgToReactNative itself (rare due to internal try-catch)
+          console.error("Conversion Error:", conversionError);
+          const errorMsg = "Conversion failed: " + conversionError.message;
+          if (isMounted) {
+            setConverted(`// ${errorMsg}`);
+            setError(errorMsg);
+            setFormattingError(null); // Clear any previous formatting error
+          }
+        }
+      } else {
+        // Clear output and errors if input is empty
+        if (isMounted) {
+          setConverted("");
+          setError(null);
+          setFormattingError(null);
+        }
       }
-      convertAndFormat();
-      return () => { isMounted = false; }; // Cleanup function
+    }
+    convertAndFormat();
+    return () => {
+      isMounted = false;
+    }; // Cleanup function
   }, [debouncedInput]); // Rerun when debouncedInput changes
 
   return (
     // Outer container for title and editors
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       {/* Title Section */}
-      <h1 style={{ textAlign: "center", padding: "10px 0", margin: 0, borderBottom: "1px solid #ccc" }}>
+      <h1
+        style={{
+          textAlign: "center",
+          padding: "10px 0",
+          margin: 0,
+          borderBottom: "1px solid #ccc",
+        }}
+      >
         SVG to React Native SVG Converter
       </h1>
 
@@ -291,19 +408,72 @@ function App() {
         }}
       >
         {/* Left Panel: SVG Input */}
-        <div style={{ flex: 1, padding: "10px", borderRight: "1px solid #ccc", overflow: "auto", display: 'flex', flexDirection: 'column' }}>
-          <h2 style={{ marginTop: 0 }}>SVG Input</h2>
-          {/* Display general conversion error first if it exists */}
-          {error && (
+        <div
+          style={{
+            flex: 1,
+            padding: "10px",
+            borderRight: "1px solid #ccc",
+            overflow: "auto",
+            display: "flex",
+            flexDirection: "column",
+            backgroundColor: isDragOver ? "#f0f8ff" : "transparent",
+            border: isDragOver ? "2px dashed #007acc" : "none",
+            transition: "all 0.2s ease",
+            position: "relative",
+          }}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          data-drop-zone="true"
+        >
+          <h2 style={{ marginTop: 0 }}>
+            SVG Input
+            <span
+              style={{ fontSize: "14px", color: "#666", fontWeight: "normal" }}
+            >
+              (Paste SVG code or drag & drop .svg file)
+            </span>
+          </h2>
+          {/* Display file error first if it exists */}
+          {fileError && (
+            <p style={{ color: "red", margin: "8px 0 0", fontSize: 14 }}>
+              File Error: {fileError}
+            </p>
+          )}
+          {/* Display general conversion error if it exists and no file error */}
+          {error && !fileError && (
             <p style={{ color: "red", margin: "8px 0 0", fontSize: 14 }}>
               Error: {error}
             </p>
           )}
-          {/* Display formatting error (SVG or JSX) if no conversion error */}
-          {formattingError && !error && (
+          {/* Display formatting error (SVG or JSX) if no other errors */}
+          {formattingError && !error && !fileError && (
             <p style={{ color: "#ff9800", margin: "4px 0 0", fontSize: 13 }}>
-              {formattingError} 
+              {formattingError}
             </p>
+          )}
+          {/* Drag overlay */}
+          {isDragOver && (
+            <div
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: "rgba(0, 122, 204, 0.1)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "18px",
+                color: "#007acc",
+                fontWeight: "bold",
+                zIndex: 10,
+                pointerEvents: "none",
+              }}
+            >
+              Drop SVG file here
+            </div>
           )}
           {/* SVG Input Editor */}
           <Editor
@@ -321,16 +491,53 @@ function App() {
           />
         </div>
         {/* Right Panel: React Native SVG Output */}
-        <div style={{ flex: 1, padding: "10px", overflow: "auto", display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-            <h2 style={{ marginTop: 0, marginBottom: 0 }}>React Native SVG Output</h2>
-            <button onClick={handleCopy} style={{ padding: '5px 10px', cursor: 'pointer' }}>
+        <div
+          style={{
+            flex: 1,
+            padding: "10px",
+            overflow: "auto",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "5px",
+            }}
+          >
+            <h2 style={{ marginTop: 0, marginBottom: 0 }}>
+              React Native SVG Output
+            </h2>
+            <button
+              onClick={handleCopy}
+              style={{ padding: "5px 10px", cursor: "pointer" }}
+            >
               Copy JSX
             </button>
-            {copySuccess && <span style={{ marginLeft: '10px', color: 'green', fontSize: '12px' }}>{copySuccess}</span>}
+            {copySuccess && (
+              <span
+                style={{ marginLeft: "10px", color: "green", fontSize: "12px" }}
+              >
+                {copySuccess}
+              </span>
+            )}
           </div>
           {/* Display Errors/Warnings */}
-          {error && <div style={{ color: 'red', marginBottom: '10px', whiteSpace: 'pre-wrap', flexShrink: 0 }}>{error}</div>}
+          {error && (
+            <div
+              style={{
+                color: "red",
+                marginBottom: "10px",
+                whiteSpace: "pre-wrap",
+                flexShrink: 0,
+              }}
+            >
+              {error}
+            </div>
+          )}
           {formattingError && !error && (
             <p style={{ color: "#ff9800", margin: "4px 0 0", fontSize: 13 }}>
               {formattingError}

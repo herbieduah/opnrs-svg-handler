@@ -40,3 +40,35 @@
 .read-the-docs {
   color: #888;
 }
+
+/* Drag and drop styles */
+.drag-over {
+  background-color: #f0f8ff !important;
+  border: 2px dashed #007acc !important;
+}
+
+.drag-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 122, 204, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: #007acc;
+  font-weight: bold;
+  z-index: 10;
+  pointer-events: none;
+}
+
+/* Prevent default drag behaviors on the entire app */
+* {
+  -webkit-user-drag: none;
+  -khtml-user-drag: none;
+  -moz-user-drag: none;
+  -o-user-drag: none;
+  user-drag: none;
+}
